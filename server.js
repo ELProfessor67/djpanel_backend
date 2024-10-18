@@ -15,7 +15,9 @@ const userModel = require('./models/user')
 const songModel = require('./models/song')
 const historyModel = require('./models/history')
 const playlistModel = require('./models/playlisyt')
+const autoDJListModel = require('./models/autoDJList')
 const mongoose = require('mongoose');
+
 // const uploadRouter = require('./upload');
 
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
@@ -111,22 +113,24 @@ async function playAutoDjSong(song,nextSong,_id){
 
 async function channelAutoDj(_id){
   
-  const allsongs = await songModel.find({owner: _id,isAds: false});
-  let songs = allsongs.filter(s => !s.isAds);
-  let ads = allsongs.filter(s => s.isAds);
+  const autoDJList = await autoDJListModel.findOne({owner: _id}).populate('songs.data').sort({ 'songs.index': -1 });
+  const copy = JSON.parse(JSON.stringify(autoDJList.songs || []));
+  let songs = copy.map((song) => {
+    data = song.data,
+    data.cover = song.cover;
+    return data;
+  })
+
+  if(songs.length == 0){
+    setTimeout(() => {
+      channelAutoDj(_id);
+    },600000);
+    return
+  }
 
   for(let i = 0; i < songs.length; i++){
     const song = songs[i];
     const nextSong = songs[i+1];
-  
-    if((i+1)%3 == 0){
-      
-      adIndex = Math.floor(Math.random() * ads.length);
-      ad = ads[adIndex];
-      if(ad){
-        await playAutoDjSong(ad,song,_id);
-      }
-    }
    
     await playAutoDjSong(song,nextSong,_id);
   }
