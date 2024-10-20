@@ -114,10 +114,12 @@ async function playAutoDjSong(song,nextSong,_id){
 async function channelAutoDj(_id){
   
   const autoDJList = await autoDJListModel.findOne({owner: _id}).populate('songs.data').sort({ 'songs.index': -1 });
-  const copy = JSON.parse(JSON.stringify(autoDJList.songs || []));
+  const copy = JSON.parse(JSON.stringify(autoDJList?.songs || []));
   let songs = copy.map((song) => {
     data = song.data,
     data.cover = song.cover;
+    data.album = song.album,
+    data.artist = song.artist
     return data;
   })
 
