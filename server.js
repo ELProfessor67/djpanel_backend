@@ -91,7 +91,7 @@ async function playAutoDjSong(song,nextSong,_id){
   try {
     const owner = roomsowners[_id.toString()]
     if(!owner){
-      const {title,cover,audio,_id,album,artist} = song;
+      const {title,cover,audio,album,artist} = song;
       console.log({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
       await historyModel.create({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
     }
@@ -223,6 +223,7 @@ app.get('/api/v1/song-history/:id', async (req,res) => {
   const id = req.params.id;
   
   const data = await historyModel.find({owner: id}).sort({createdAt: -1}).limit(15);
+  console.log(data);
   res.status(200).json(data)
 })
 
