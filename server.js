@@ -91,16 +91,8 @@ async function playAutoDjSong(song,nextSong,_id){
   try {
     const owner = roomsowners[_id.toString()]
     if(!owner){
-      let album;
-      let artist;
-      const {title,cover,audio,_id:songId} = currentSong[_id]?.currentSong;
-
-      const songObjectId = new mongoose.Types.ObjectId(songId);
-      const playlist = await playlistModel.findOne({ songs: songObjectId }).populate('songs');
-      if(playlist){
-        album = playlist.album || 'unknown'
-        artist = playlist.artist || 'unknown'
-      }
+      const {title,cover,audio,_id,album,artist} = song;
+      console.log({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
       await historyModel.create({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
     }
     
@@ -118,8 +110,8 @@ async function channelAutoDj(_id){
   let songs = copy.map((song) => {
     data = song.data,
     data.cover = song.cover;
-    data.album = song.album,
-    data.artist = song.artist
+    data.album = song.album;
+    data.artist = song.artist;
     return data;
   })
 
