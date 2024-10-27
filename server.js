@@ -58,48 +58,52 @@ const listeners = {};
 
 let currentSong = {}
 
-function streamOnRTMP(songURl,_id){
-  console.log('songURl',songURl,_id)
-  return new Promise((resolve,reject) => {
-    ffmpeg(path.join(__dirname,`./public${songURl}`))
-    .inputOptions('-re')
-    .audioCodec('copy')
-    .format('flv')
-    .output(`${process.env.RTMP_URL}/${_id}`)
-    .on('start', (commandLine) => {
-      console.log('FFmpeg command: ' + commandLine);
-    })
-    .on('error', (err, stdout, stderr) => {
-      console.log('Error: ' + err.message);
-      console.log(`ffmpeg stderr ${_id}:` + stderr);
-    })
-    .on('stderr', (stderrLine) => {
-      // console.log(`ffmpeg stderr ${_id}:` + stderrLine);
-    })
-    .on('end', () => {
-      resolve(true);
-    })
-    .run();
-  })
-}
 
+function streamOnIcecast(songUrl, _id) {
+  console.log('songUrl:', songUrl, '_id:', _id);
+  return new Promise((resolve, reject) => {
+    ffmpeg(path.join(__dirname, `./public${songUrl}`))
+      .inputOptions('-re') // Read input at its native frame rate
+      .audioCodec('libmp3lame') // Specify the audio codec
+      .audioBitrate('128k') // Set audio bitrate
+      .format('mp3') // Set the output format
+      .output(`icecast://source:hgdjpanel@icecast.hgdjlive.com:8000/${_id}`) // Icecast stream URL
+      .on('start', (commandLine) => {
+        console.log('FFmpeg command: ' + commandLine);
+      })
+      .on('error', (err, stdout, stderr) => {
+        console.log('Error: ' + err.message);
+        console.log(`ffmpeg stderr ${_id}: ` + stderr);
+        reject(err); // Reject the promise on error
+      })
+      .on('end', () => {
+        console.log(`Stream ended for song ID: ${_id}`);
+        resolve(true); // Resolve the promise when the stream ends
+      })
+      .run();
+  });
+}
 
 async function playAutoDjSong(song,nextSong,_id){
  if(!song?.audio) return;
-  currentSong[_id] = {url: `${process.env.SOCKET_URL}${song.audio}`,currentTime: Date.now(),nextSong, currentSong: song}
-  io.to(_id.toString()).emit('song-change',{currentSong: currentSong[_id]});
-  try {
-    const owner = roomsowners[_id.toString()]
-    if(!owner){
-      const {title,cover,audio,album,artist} = song;
-      console.log({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
-      await historyModel.create({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
+
+  setTimeout(async () => {
+    currentSong[_id] = {url: `${process.env.SOCKET_URL}${song.audio}`,currentTime: Date.now(),nextSong, currentSong: song}
+    io.to(_id.toString()).emit('song-change',{currentSong: currentSong[_id]});
+    try {
+      const owner = roomsowners[_id.toString()]
+      if(!owner){
+        const {title,cover,audio,album,artist} = song;
+        console.log({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
+        await historyModel.create({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
+      }
+      
+    } catch (error) {
+      console.log(error.message)
     }
-    
-  } catch (error) {
-    console.log(error.message)
-  }
-  await streamOnRTMP(song.audio,_id);
+  },1000);
+  
+  await streamOnIcecast(song.audio,_id);
   return true;
 }
 
