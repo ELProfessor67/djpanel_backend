@@ -2,3 +2,4 @@
 /public
 /config/.env    
 /config
+/test.js
