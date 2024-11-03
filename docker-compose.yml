@@ -1,0 +1,12 @@
+version: '1.0'
+
+services:
+  linux:
+    image: "ubuntu-linux"
+    container_name: "ubuntu-linux-container"
+    tty: true
+    restart: "always"
+    ports:
+      - "4000:4000"
+    volumes:
+      - "./:/app"

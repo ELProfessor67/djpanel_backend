@@ -16,9 +16,8 @@ const songModel = require('./models/song')
 const historyModel = require('./models/history')
 const playlistModel = require('./models/playlisyt')
 const autoDJListModel = require('./models/autoDJList')
+const mongoose = require('mongoose');
 const { spawn } = require('child_process');
-const os = require('os');
-
 // const uploadRouter = require('./upload');
 
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
@@ -27,6 +26,7 @@ const ffmpeg = require('fluent-ffmpeg');
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
 const schedule = require('node-schedule');
+const { mergeSongs, areArraysEqual, getSongDuration } = require('./utils/merge-song');
 
 
 config({path: path.join(__dirname,'./config/.env')});
@@ -56,178 +56,188 @@ let cronJobRefs = {}
 const songsStartTime = {}
 const songsStartTimeByUser = {}
 const listeners = {};
-let songs = [];
-let currentSong = {}
+let prevPlaylist = [];
+let prevSongs = [];
+let timerRef = null;
 let currentIndex = 0;
-let djPanelId = "655347b59c00a7409d9181c3"
+let songsDurations = {};
+let preparing = false;
+const sleep = (ms) => new Promise((res,rej) => setTimeout(() => res(),ms))
+let startFirstTime 
+let currentSong = {}
 
 
-const ffmpegOptions = [
-  '-re', // Read input at native frame rate
-  '-i', 'pipe:0', // Input from pipe (stdin)
-  '-codec:a', 'libmp3lame', // Audio codec
-  '-b:a', '128k', // Audio bitrate
-  '-f', 'mp3', // Output format
-  'icecast://source:hgdjpanel@icecast.hgdjlive.com:8000/655347b59c00a7409d9181c3' // Icecast server URL
-];
-const ffmpegProcess = spawn('ffmpeg', ffmpegOptions);
+// function streamOnIcecast(songUrl, _id) {
+//   console.log('songUrl:', songUrl, '_id:', _id);
+//   return new Promise((resolve, reject) => {
+//     ffmpeg(path.join(__dirname, `/${songUrl}`))
+//       .inputOptions('-re') // Read input at its native frame rate
+//       .audioCodec('libmp3lame') // Specify the audio codec
+//       .audioBitrate('128k') // Set audio bitrate
+//       .format('mp3') // Set the output format
+//       .output(`icecast://source:hgdjpanel@icecast.hgdjlive.com:8000/test-${_id}`) // Icecast stream URL
+//       .on('start', (commandLine) => {
+//         console.log('FFmpeg command: ' + commandLine);
+//       })
+//       .on('error', (err, stdout, stderr) => {
+//         console.log('Error: ' + err.message);
+//         console.log(`ffmpeg stderr ${_id}: ` + stderr);
+//         resolve(true);
+//       })
+//       .on('end', () => {
+//         console.log(`Stream ended for song ID: ${_id}`);
+//         resolve(true);
+//       }).on('data', (data) => {
+//         console.log(data)
+//       })
+//       .run();
+//   });
+// }
 
-ffmpegProcess.stdout.on('data', (data) => {
-  console.log(`ffmpeg stdout: ${data}`);
-});
+function streamOnIcecast(songUrl, _id) {
+  console.log('songUrl:', songUrl, '_id:', _id);
 
-
-
-ffmpegProcess.stderr.on('data', (data) => {
-  console.error(`ffmpeg stderr: ${data}`);
-});
-
-ffmpegProcess.on('close', (code) => {
-  console.log(`ffmpeg process exited with code ${code}`);
-});
-
-function getSongDuration(filePath) {
   return new Promise((resolve, reject) => {
-      const ffprobe = spawn('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath]);
+      // Construct the file path and the Icecast output URL
+      const inputPath = path.join(__dirname, songUrl);
+      const outputUrl = `icecast://source:hgdjpanel@icecast.hgdjlive.com:8000/test-${_id}`;
 
-      let duration = '';
-      ffprobe.stdout.on('data', (data) => {
-          duration += data;
+      // FFmpeg command and arguments
+      const args = [
+          '-re', // Read input at its native frame rate
+          '-i', inputPath, // Input file
+          '-c:a', 'libmp3lame', // Audio codec
+          '-b:a', '128k', // Audio bitrate
+          '-f', 'mp3', // Output format
+          outputUrl // Output URL to Icecast
+      ];
+
+      // Spawn the FFmpeg process
+      const ffmpegProcess = spawn('ffmpeg', args);
+
+      // Listen for stdout and stderr data
+      ffmpegProcess.stdout.on('data', (data) => {
+          console.log(`FFmpeg stdout ${_id}: ${data}`);
       });
 
-      ffprobe.stderr.on('data', (data) => {
-          reject(`ffprobe stderr: ${data}`);
+      ffmpegProcess.stderr.on('data', (data) => {
+          console.log(`FFmpeg stderr ${_id}: ${data}`);
       });
 
-      ffprobe.on('close', (code) => {
+      // Handle the process start
+      ffmpegProcess.on('spawn', () => {
+          console.log(`FFmpeg process started for song ID: ${_id}`);
+      });
+
+      // Handle process errors
+      ffmpegProcess.on('error', (err) => {
+          console.error(`Error streaming song ${_id}: ${err.message}`);
+          resolve(true); // Resolve on error
+      });
+
+      // Handle the process exit
+      ffmpegProcess.on('close', (code) => {
           if (code === 0) {
-              resolve(parseFloat(duration.trim()));
+              console.log(`Stream ended successfully for song ID: ${_id}`);
           } else {
-              reject(`ffprobe process exited with code ${code}`);
+              console.error(`FFmpeg process exited with code ${code} for song ID: ${_id}`);
           }
+          resolve(true);
       });
   });
 }
 
-const convertToMp3 = (inputFilePath) => {
-  const tempFilePath = path.join(os.tmpdir(), `mp_${path.basename(inputFilePath)}`);
-  return new Promise((resolve, reject) => {
-    // Check if the input file exists
-    if (!fs.existsSync(inputFilePath)) {
-      return reject(new Error(`Input file does not exist: ${inputFilePath}`));
-    }
 
-    // Set up the FFmpeg command
-    const ffmpegCommand = [
-      '-i', inputFilePath,    // Input file
-      '-codec:a', 'libmp3lame', // Set audio codec to MP3
-      '-b:a', '192k',         // Set audio bitrate
-      tempFilePath          // Output file
-    ];
-
-    // Spawn FFmpeg process
-    const ffmpeg = spawn('ffmpeg', ffmpegCommand);
-
-    // Log FFmpeg errors
-    ffmpeg.stderr.on('data', (data) => {
-      console.error(`FFmpeg stderr: ${data}`);
-    });
-
-    // Handle successful completion
-    ffmpeg.on('close', (code) => {
-      if (code === 0) {
-        console.log(`Conversion successful: ${tempFilePath}`);
-        resolve(tempFilePath);
-      } else {
-        reject(new Error(`FFmpeg process exited with code ${code}`));
-      }
-    });
-  });
-};
-
-
-
-
-
-
-async function updateSong(song,nextSong,_id){
+async function playAutoDjSong(song,nextSong,_id){
  if(!song?.audio) return;
 
-    currentSong[_id] = {url: `${process.env.SOCKET_URL}${song.audio}`,currentTime: Date.now(),nextSong, currentSong: song}
-    io.to(_id.toString()).emit('song-change',{currentSong: currentSong[_id]});
-    try {
-      const owner = roomsowners[_id.toString()]
-      if(!owner){
-        const {title,cover,audio,album,artist} = song;
-        console.log({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
-        await historyModel.create({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
-      }
-      
-    } catch (error) {
-      console.log(error.message)
-    }
-}
-
-async function streamNextSong() {
-  if (currentIndex >= songs.length) {
-      console.log('All Songs play')
-      channelAutoDj(djPanelId)
-      return;
-  }
-
-
-  const song = songs[currentIndex];
-  const nextSong = songs[currentIndex+1];
-
-
-  const songPath = path.resolve(path.join(__dirname, `./public${song.audio}`));
+  currentSong[_id] = {url: `${process.env.SOCKET_URL}${song.audio}`,currentTime: Date.now(),nextSong, currentSong: song}
+  io.to(_id.toString()).emit('song-change',{currentSong: currentSong[_id]});
   try {
-    const fixedSongPath = await convertToMp3(songPath);
-    const songStream = fs.createReadStream(fixedSongPath);
-  
-    setTimeout(() => {
-      updateSong(song,nextSong,djPanelId);
-    }, [200]);
-  
-   
-  
-  
-    console.log(`Streaming: ${songPath}`);
-  
-    const duration = await getSongDuration(songPath);
-    console.log(`Duration: ${duration} seconds`);
-  
-    // Set a timeout for the duration of the song to start the next song
-    setTimeout(() => {
-        currentIndex++;
-        console.log(`Finished streaming: ${songPath}`);
-        streamNextSong();
-    }, duration * 1000);
-  
-    // Pipe the song stream to ffmpeg stdin
-    songStream.pipe(ffmpegProcess.stdin, { end: false });
+    const owner = roomsowners[_id.toString()]
+    if(!owner){
+      const {title,cover,audio,album,artist} = song;
+      await historyModel.create({title,cover,album: album || 'unknown',audio,artist: artist || 'unknown',owner: _id.toString()})
+    }
+      
   } catch (error) {
-    currentIndex++;
-    console.log(`Skipping Song: ${songPath}`);
-    streamNextSong();
+    console.log(error.message)
   }
 
-
+  return true;
 }
+
+async function startPreparing(_id){
+  console.log('start preparing...')
+    preparing = true;   
+    const autoDJList = await autoDJListModel.findOne({owner: _id}).populate('songs.data').sort({ 'songs.index': -1 });
+    const copy = JSON.parse(JSON.stringify(autoDJList?.songs || []));
+    let songs = copy.map((song) => {
+      data = song.data,
+      data.cover = song.cover;
+      data.album = song.album;
+      data.artist = song.artist;
+      return data;
+    });
+
+    if(songs.length == 0){
+      return songs;
+    }
+  
+    
+    const songPaths = songs.map(song => path.join(__dirname,`./public/${song.audio}`));
+    if(!(prevPlaylist.length != 0 && areArraysEqual(prevPlaylist,songPaths))){
+      console.log('songs merging...')
+      await mergeSongs(songPaths,`important_${_id}.mp3`);
+      console.log('songs merged...')
+      const songsDurations = {}
+      for (let index = 0; index < songs.length; index++) {
+        songsDurations[index] = await getSongDuration(path.join(__dirname,`./public/${songs[index].audio}`));
+      }
+      fs.writeFileSync('song-duration.json',JSON.stringify(songsDurations));
+    }
+
+    prevPlaylist = songPaths;
+    return songs;
+}
+
+
+function songTimer(songs,_id){
+  console.log('Currently playing...',songs[currentIndex]?.title);
+  if(!songs[currentIndex]) return
+  timerRef = setTimeout(() => {
+    currentIndex++;
+    playAutoDjSong(songs[currentIndex],songs[currentIndex+1],_id);
+    if((songs.length -1) - currentIndex == 4 && preparing == false){
+      startPreparing(_id);
+    }
+    songTimer(songs,_id);
+  },(songsDurations[currentIndex] || 0) * 1000);
+}
+
 
 async function channelAutoDj(_id){
-  
-  const autoDJList = await autoDJListModel.findOne({owner: _id}).populate('songs.data').sort({ 'songs.index': -1 });
-  const copy = JSON.parse(JSON.stringify(autoDJList?.songs || []));
-  let Djsongs = copy.map((song) => {
-    data = song.data,
-    data.cover = song.cover;
-    data.album = song.album;
-    data.artist = song.artist;
-    return data;
-  })
+  if('65bcba4b6181d5d912ac53d7' == _id) return;
+  //check files is present or not
+  console.log('starting playlist')
+  let importFileExist = fs.existsSync(`important_${_id}.mp3`);
+  const fileExist = fs.existsSync(`${_id}.mp3`);
+  let songs = prevSongs;
 
-  songs = Djsongs;
+  if(!importFileExist && !fileExist){
+    songs = await startPreparing(_id);
+    importFileExist = true;
+  }
+
+
+  if(importFileExist){
+    if(fileExist){
+      fs.unlinkSync(`${_id}.mp3`);
+    }
+    fs.renameSync(`important_${_id}.mp3`, `${_id}.mp3`);
+  }
+
+
 
   if(songs.length == 0){
     setTimeout(() => {
@@ -235,15 +245,44 @@ async function channelAutoDj(_id){
     },600000);
     return
   }
-  streamNextSong();
-
+  
+  
+  prevSongs = songs;
+  
+  clearTimeout(timerRef);
+  currentIndex = 0;
+  songsDurations = JSON.parse(fs.readFileSync('song-duration.json') || '{}')
+  preparing = false;
+ 
+  
+  streamOnIcecast(`${_id}.mp3`,_id).then(() => channelAutoDj(_id));
+  playAutoDjSong(songs[currentIndex],songs[currentIndex+1],_id);
+  console.log('sleep')
+  await sleep(12000);
+  console.log('sleep')
+  songTimer(songs,_id);
 }
 
 //auto dj start
 async function autoDj(){
+  let users = await userModel.find();
+  users = users.filter((data) => { 
+    return !data.isDJ
+  })
+
+
+  
+  const autoDjPromises = users.map(async ({ _id }) => {
+    try {
+      
+      await channelAutoDj(_id);
+    } catch (error) {
+      console.error(`Error in autoDj for user ${_id}:`, error);
+    }
+  });
 
   try {
-    channelAutoDj(djPanelId);
+    await Promise.all(autoDjPromises);
     console.log('All autoDj processes completed successfully');
   } catch (error) {
     console.error('Error in autoDj:', error);
