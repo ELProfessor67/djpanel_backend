@@ -27,6 +27,7 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
 const schedule = require('node-schedule');
 const { mergeSongs, areArraysEqual, getSongDuration } = require('./utils/merge-song');
+const { changeAllSongsTags, createplaylist } = require('./utils/changeTagChange');
 
 
 config({path: path.join(__dirname,'./config/.env')});
@@ -65,85 +66,25 @@ let preparing = false;
 const sleep = (ms) => new Promise((res,rej) => setTimeout(() => res(),ms))
 let startFirstTime 
 let currentSong = {}
+let processLiq = null;
+const djPanelId = "655347b59c00a7409d9181c3"
 
+function runLiquidsoap() {
+  processLiq = spawn('/root/.opam/default/bin/liquidsoap', ['rr.liq']);
 
-// function streamOnIcecast(songUrl, _id) {
-//   console.log('songUrl:', songUrl, '_id:', _id);
-//   return new Promise((resolve, reject) => {
-//     ffmpeg(path.join(__dirname, `/${songUrl}`))
-//       .inputOptions('-re') // Read input at its native frame rate
-//       .audioCodec('libmp3lame') // Specify the audio codec
-//       .audioBitrate('128k') // Set audio bitrate
-//       .format('mp3') // Set the output format
-//       .output(`icecast://source:hgdjpanel@icecast.hgdjlive.com:8000/test-${_id}`) // Icecast stream URL
-//       .on('start', (commandLine) => {
-//         console.log('FFmpeg command: ' + commandLine);
-//       })
-//       .on('error', (err, stdout, stderr) => {
-//         console.log('Error: ' + err.message);
-//         console.log(`ffmpeg stderr ${_id}: ` + stderr);
-//         resolve(true);
-//       })
-//       .on('end', () => {
-//         console.log(`Stream ended for song ID: ${_id}`);
-//         resolve(true);
-//       }).on('data', (data) => {
-//         console.log(data)
-//       })
-//       .run();
-//   });
-// }
+  // Capture and log standard output
+  processLiq.stdout.on('data', (data) => {
+      console.log(`stdout: ${data}`);
+  });
 
-function streamOnIcecast(songUrl, _id) {
-  console.log('songUrl:', songUrl, '_id:', _id);
+  // Capture and log standard error
+  processLiq.stderr.on('data', (data) => {
+      console.error(`stderr: ${data}`);
+  });
 
-  return new Promise((resolve, reject) => {
-      // Construct the file path and the Icecast output URL
-      const inputPath = path.join(__dirname, songUrl);
-      const outputUrl = `icecast://source:hgdjpanel@icecast.hgdjlive.com:8000/test-${_id}`;
-
-      // FFmpeg command and arguments
-      const args = [
-          '-re', // Read input at its native frame rate
-          '-i', inputPath, // Input file
-          '-c:a', 'libmp3lame', // Audio codec
-          '-b:a', '128k', // Audio bitrate
-          '-f', 'mp3', // Output format
-          outputUrl // Output URL to Icecast
-      ];
-
-      // Spawn the FFmpeg process
-      const ffmpegProcess = spawn('ffmpeg', args);
-
-      // Listen for stdout and stderr data
-      ffmpegProcess.stdout.on('data', (data) => {
-          console.log(`FFmpeg stdout ${_id}: ${data}`);
-      });
-
-      ffmpegProcess.stderr.on('data', (data) => {
-          console.log(`FFmpeg stderr ${_id}: ${data}`);
-      });
-
-      // Handle the process start
-      ffmpegProcess.on('spawn', () => {
-          console.log(`FFmpeg process started for song ID: ${_id}`);
-      });
-
-      // Handle process errors
-      ffmpegProcess.on('error', (err) => {
-          console.error(`Error streaming song ${_id}: ${err.message}`);
-          resolve(true); // Resolve on error
-      });
-
-      // Handle the process exit
-      ffmpegProcess.on('close', (code) => {
-          if (code === 0) {
-              console.log(`Stream ended successfully for song ID: ${_id}`);
-          } else {
-              console.error(`FFmpeg process exited with code ${code} for song ID: ${_id}`);
-          }
-          resolve(true);
-      });
+  // Capture exit event and log the exit code
+  processLiq.on('close', (code) => {
+      console.log(`Liquidsoap process exited with code ${code}`);
   });
 }
 
@@ -167,100 +108,20 @@ async function playAutoDjSong(song,nextSong,_id){
   return true;
 }
 
-async function startPreparing(_id){
-  console.log('start preparing...')
-    preparing = true;   
-    const autoDJList = await autoDJListModel.findOne({owner: _id}).populate('songs.data').sort({ 'songs.index': -1 });
-    const copy = JSON.parse(JSON.stringify(autoDJList?.songs || []));
-    let songs = copy.map((song) => {
-      data = song.data,
-      data.cover = song.cover;
-      data.album = song.album;
-      data.artist = song.artist;
-      return data;
-    });
-
-    if(songs.length == 0){
-      return songs;
-    }
-  
-    
-    const songPaths = songs.map(song => path.join(__dirname,`./public/${song.audio}`));
-    if(!(prevPlaylist.length != 0 && areArraysEqual(prevPlaylist,songPaths))){
-      console.log('songs merging...')
-      await mergeSongs(songPaths,`important_${_id}.mp3`);
-      console.log('songs merged...')
-      const songsDurations = {}
-      for (let index = 0; index < songs.length; index++) {
-        songsDurations[index] = await getSongDuration(path.join(__dirname,`./public/${songs[index].audio}`));
-      }
-      fs.writeFileSync('song-duration.json',JSON.stringify(songsDurations));
-    }
-
-    prevPlaylist = songPaths;
-    return songs;
-}
 
 
-function songTimer(songs,_id){
-  console.log('Currently playing...',songs[currentIndex]?.title);
-  if(!songs[currentIndex]) return
-  timerRef = setTimeout(() => {
-    currentIndex++;
-    playAutoDjSong(songs[currentIndex],songs[currentIndex+1],_id);
-    if((songs.length -1) - currentIndex == 4 && preparing == false){
-      startPreparing(_id);
-    }
-    songTimer(songs,_id);
-  },(songsDurations[currentIndex] || 0) * 1000);
-}
 
 
 async function channelAutoDj(_id){
   if('65bcba4b6181d5d912ac53d7' == _id) return;
-  //check files is present or not
-  console.log('starting playlist')
-  let importFileExist = fs.existsSync(`important_${_id}.mp3`);
-  const fileExist = fs.existsSync(`${_id}.mp3`);
-  let songs = prevSongs;
 
-  if(!importFileExist && !fileExist){
-    songs = await startPreparing(_id);
-    importFileExist = true;
+  if(processLiq){
+    processLiq.kill();
   }
 
-
-  if(importFileExist){
-    if(fileExist){
-      fs.unlinkSync(`${_id}.mp3`);
-    }
-    fs.renameSync(`important_${_id}.mp3`, `${_id}.mp3`);
-  }
-
-
-
-  if(songs.length == 0){
-    setTimeout(() => {
-      channelAutoDj(_id);
-    },600000);
-    return
-  }
-  
-  
-  prevSongs = songs;
-  
-  clearTimeout(timerRef);
-  currentIndex = 0;
-  songsDurations = JSON.parse(fs.readFileSync('song-duration.json') || '{}')
-  preparing = false;
- 
-  
-  streamOnIcecast(`${_id}.mp3`,_id).then(() => channelAutoDj(_id));
-  playAutoDjSong(songs[currentIndex],songs[currentIndex+1],_id);
-  console.log('sleep')
-  await sleep(12000);
-  console.log('sleep')
-  songTimer(songs,_id);
+  await changeAllSongsTags(_id);
+  await createplaylist(_id);
+  runLiquidsoap();
 }
 
 //auto dj start
@@ -290,7 +151,7 @@ async function autoDj(){
 }
 
 
-autoDj();
+// autoDj();
 let settimeoutref;
 app.post('/upload',async (req,res) => {
   try{
@@ -359,6 +220,34 @@ app.get('/api/v1/song-history/:id', async (req,res) => {
   res.status(200).json(data)
 })
 
+
+app.post('/api/v1/change-metadata', async (req,res) => {
+  const {songId} = req.body;
+  const autoDJList = await autoDJListModel.findOne({owner: djPanelId}).populate('songs.data').sort({ 'songs.index': -1 });
+  const copy = JSON.parse(JSON.stringify(autoDJList?.songs || []));
+  let songs = copy.map((song) => {
+    data = song.data,
+    data.cover = song.cover;
+    data.album = song.album;
+    data.artist = song.artist;
+    return data;
+  });
+  const index = songs.findIndex(s => s._id.toString() == songId);
+
+  const currentSong = songs[index];
+  const nextSong = songs[index+1];
+
+  playAutoDjSong(currentSong,nextSong,djPanelId);
+
+  console.log('song change : ',currentSong?.title,nextSong?.title);
+  
+  res.send(songId);
+})
+
+app.get('/api/v1/list-change', async (req,res) => {
+  channelAutoDj(djPanelId);
+  res.send("restarting server...");
+})
 
 app.delete('/delete',async (req,res) => {
   try{
