@@ -115,13 +115,13 @@ async function playAutoDjSong(song,nextSong,_id){
 async function channelAutoDj(_id){
   if('65bcba4b6181d5d912ac53d7' == _id) return;
 
-  if(processLiq){
-    processLiq.kill();
-  }
+  
 
   await changeAllSongsTags(_id);
   await createplaylist(_id);
-  runLiquidsoap();
+  if(!processLiq){
+    runLiquidsoap();
+  }
 }
 
 //auto dj start
