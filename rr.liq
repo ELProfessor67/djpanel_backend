@@ -7,7 +7,7 @@ playlist = playlist("/root/djpanel_backend/playlist.m3u", mode="normal", reload_
 fallback_song = single("/root/djpanel_backend/public/upload/songs/03 God is Real-1713146659719.mp3")
 
 # Use a fallback source combining the playlist and fallback song
-radio = fallback(track_sensitive=false, [playlist, fallback_song])
+radio = fallback(track_sensitive=true, [playlist, fallback_song])
 
 # Stream to Icecast server with specified parameters
 output.icecast(
