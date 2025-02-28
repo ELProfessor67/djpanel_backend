@@ -187,7 +187,7 @@ async function autoDj() {
 
 
 
-const welcomeTonesPlayed = {};
+const welcomeTonesPlayed = {"655347b59c00a7409d9181c3": false};
 
 
 
@@ -452,7 +452,7 @@ io.on('connection', (socket) => {
       if(data.user?.isDJ){
         welcomeTonesPlayed[data?.user?.originalId?.toString()] = true;
       }
-    },4000);
+    },10000);
   });
 
 
@@ -460,9 +460,11 @@ io.on('connection', (socket) => {
     socket.join(data.roomId);
     const owner = roomsowners[data.roomId];
     listeners[socket.id] = data.roomId;
+    console.log("hello world")
 
     if (owner) {
-      const tonePlayed = welcomeTonesPlayed[data?.user?.originalId.toString()];
+      console.log(owner,"owner")
+      const tonePlayed = welcomeTonesPlayed[owner._id];
       if (roomCurrentSongPlay[data.roomId]) {
         const { nextSong, currentSong } = roomCurrentSongPlay[data.roomId];
         io.to(socket.id).emit('room-active', { user: owner, nextSong, currentSong,tonePlayed });
