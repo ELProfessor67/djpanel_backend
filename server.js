@@ -506,7 +506,7 @@ io.on('connection', (socket) => {
 
 
   socket.on('offer', (data) => {
-    io.to(data.recieverId).emit('offer', { offer: data?.offer, senderId: socket.id });
+    io.to(data.recieverId).emit('offer', { offer: data?.offer, senderId: socket.id,isCall: data.isCall });
   });
 
   socket.on('answer', (data) => {
