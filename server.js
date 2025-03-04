@@ -187,38 +187,47 @@ async function autoDj() {
 
 
 
-const welcomeTonesPlayed = {"655347b59c00a7409d9181c3": false};
+const welcomeTonesPlayed = { "655347b59c00a7409d9181c3": false };
 
 
 
 //auto played welcometone
+let djUsers = null;
+setInterval(() => djUsers = null, 60000);
 async function autoPlayWelcomeTone() {
-  const users = await userModel.find({ isDJ: true, djOwner: djPanelId });
+
+  if (!djUsers) {
+    djUsers = await userModel.find({ isDJ: true, djOwner: djPanelId });
+  }
+
+  const users = djUsers;
   users.forEach((user) => {
     const copyUser = JSON.parse(JSON.stringify(user));
-   
+
     const isStreamDay = checkIsStreamingDay(copyUser);
     if (isStreamDay) {
       const { inRange, secondsToStart } = checkInTimeRange(user.djStartTime, user.djEndTime, copyUser);
-      if (inRange && !welcomeTonesPlayed[copyUser._id.toString()]) {
 
+      const user_id = copyUser._id.toString();
+      if (inRange && !welcomeTonesPlayed[user_id]) {
         setTimeout(() => {
-          if(!welcomeTonesPlayed[copyUser._id.toString()] && copyUser.welcomeTone){
-            welcomeTonesPlayed[copyUser._id.toString()] = true;
+          if (!welcomeTonesPlayed[user_id] && copyUser.welcomeTone) {
+            welcomeTonesPlayed[user_id] = true;
+            console.log(welcomeTonesPlayed[user_id], user_id)
             let welcomeTone = copyUser.welcomeTone;
             console.log('welcome tone started')
-            io.to(djPanelId.toString()).emit('play-welcome-tone',{welcomeTone});
+            io.to(djPanelId.toString()).emit('play-welcome-tone', { welcomeTone });
           }
-        },30000)
-       
+        }, 10);
+
       } else {
-        if (welcomeTonesPlayed[copyUser._id.toString()]) {
-          welcomeTonesPlayed[copyUser._id.toString()] = false;
+        if (welcomeTonesPlayed[user_id] && !inRange) {
+          welcomeTonesPlayed[user_id] = false;
         }
       }
     } else {
-      if (welcomeTonesPlayed[copyUser._id.toString()]) {
-        welcomeTonesPlayed[copyUser._id.toString()] = false;
+      if (welcomeTonesPlayed[user_id] && !isStreamDay) {
+        welcomeTonesPlayed[user_id] = false;
       }
     }
 
@@ -230,7 +239,7 @@ async function autoPlayWelcomeTone() {
 autoPlayWelcomeTone();
 setInterval(() => {
   autoPlayWelcomeTone();
-},30000);
+}, 1000);
 
 
 
@@ -440,19 +449,21 @@ io.on('connection', (socket) => {
   console.log('User connected');
 
   socket.on('owner-join', (data) => {
-    
+
     socket.join(data?.user?._id.toString());
     if (data.user) data.user.socketId = socket.id;
     roomsowners[data?.user?._id] = data?.user;
     ownersSocketId[socket.id] = data?.user?._id;
 
-   
-    io.to(data?.user?._id).emit('room-active-now', { user: data?.user });
-    setTimeout(() => {
-      if(data.user?.isDJ){
-        welcomeTonesPlayed[data?.user?.originalId?.toString()] = true;
-      }
-    },10000);
+    const currentRoomDetails = roomCurrentSongPlay[data?.user?._id.toString()];
+    let nextSong = null;
+    let currentSong = null;
+
+    if (currentRoomDetails) {
+      ({ nextSong, currentSong } = currentRoomDetails);
+    }
+
+    io.to(data?.user?._id).emit('room-active-now', { user: data?.user, nextSong, currentSong });
   });
 
 
@@ -463,13 +474,12 @@ io.on('connection', (socket) => {
     console.log("hello world")
 
     if (owner) {
-      console.log(owner,"owner")
-      const tonePlayed = welcomeTonesPlayed[owner._id];
+      console.log(owner, "owner")
       if (roomCurrentSongPlay[data.roomId]) {
         const { nextSong, currentSong } = roomCurrentSongPlay[data.roomId];
-        io.to(socket.id).emit('room-active', { user: owner, nextSong, currentSong,tonePlayed });
+        io.to(socket.id).emit('room-active', { user: owner, nextSong, currentSong });
       } else {
-        io.to(socket.id).emit('room-active', { user: owner,tonePlayed });
+        io.to(socket.id).emit('room-active', { user: owner });
       }
     } else {
       const butScheduleActive = scheduleActive[data.roomId];
@@ -506,7 +516,7 @@ io.on('connection', (socket) => {
 
 
   socket.on('offer', (data) => {
-    io.to(data.recieverId).emit('offer', { offer: data?.offer, senderId: socket.id,isCall: data.isCall });
+    io.to(data.recieverId).emit('offer', { offer: data?.offer, senderId: socket.id, isCall: data.isCall });
   });
 
   socket.on('answer', (data) => {
@@ -545,7 +555,7 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const userId = ownersSocketId[socket.id];
-    
+
     let user;
     if (userId) {
       user = roomsowners[userId];
@@ -621,9 +631,9 @@ function deleteRoute(route) {
 }
 
 async function setJobs(datetime, song, user, _id, status) {
- 
+
   cronJobRefs[_id] = schedule.scheduleJob(new Date(datetime), async () => {
-    
+
     // scheduleItems.forEach((ele,i) => {
     //   if(ele._id == _id){
     //     scheduleItems[i].status = 'processing'
